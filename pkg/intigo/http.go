@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
@@ -12,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pquerna/otp/totp"
+	//"github.com/pquerna/otp/totp"
 	"golang.org/x/net/html"
 	"golang.org/x/time/rate"
 )
@@ -103,9 +104,16 @@ func (c *Client) Authenticate() error {
 
 	defer res.Body.Close()
 
+    log.Println("statuscode", res.StatusCode)
 	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("unknown error, status code: %d", res.StatusCode)
 	}
+    //bodyBytes, err := io.ReadAll(res.Body)
+        if err != nil {
+            log.Fatal(err)
+        }
+    //bodyString := string(bodyBytes)
+    //log.Println(bodyString)
 
 	finalURL := res.Request.URL.String()
 
@@ -114,7 +122,7 @@ func (c *Client) Authenticate() error {
 		// Parse HTML and find CSRF token and Return URL
 		root, err := html.Parse(res.Body)
 		if err != nil {
-			return fmt.Errorf("unknown error, status code: %d", res.StatusCode)
+			return fmt.Errorf("unknown error 1, status code: %d", res.StatusCode)
 		}
 
 		csrfToken, err := c.getElementValue("__RequestVerificationToken", root)
@@ -128,19 +136,24 @@ func (c *Client) Authenticate() error {
 		}
 
 		// Prepare form for POST request
+        // This POST Request only requieres the username  
 		form := url.Values{}
 		form.Add("__RequestVerificationToken", csrfToken)
 		form.Add("Input.ReturnUrl", returnURL)
+        //log.Println("returnURL", returnURL)
 		form.Add("Input.Email", c.username)
-		form.Add("Input.Password", c.password)
+        form.Add("Input.RememberLogin", "true")
+        form.Add("Input.LocalLogin", "false")
+        form.Add("Input.WebHostUrl", "https://app.intigriti.com")
+        //log.Println("Input.Email", c.username)
+		//form.Add("Input.Password", c.password)
+        //log.Println("Input.Password", c.password)
 
-		// Second request to submit username and password
 		// We do not expect response body. Cookie is all we need (handled by CookieJar)
 		req2, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login", c.LoginURL), strings.NewReader(form.Encode()))
 		if err != nil {
 			return err
 		}
-
 		req2.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		res2, err := c.HTTPClient.Do(req2)
 		if err != nil {
@@ -148,14 +161,70 @@ func (c *Client) Authenticate() error {
 		}
 
 		defer res2.Body.Close()
+        //bodyBytes, err := io.ReadAll(res2.Body)
+        if err != nil {
+            log.Fatal(err)
+        }
+        //bodyString := string(bodyBytes)
+            //log.Println(bodyString)
+        // Get the slice of cookies from the request
+        cookies := req2.Cookies()
+
+        // Iterate over the slice of cookies and print the name and value of each cookie
+        for _, cookie := range cookies {
+        	fmt.Printf("Cookie: %s = %s\n", cookie.Name, cookie.Value)
+        }
 
 		// Check status
 		if res2.StatusCode < http.StatusOK || res2.StatusCode >= http.StatusBadRequest {
-			return fmt.Errorf("unknown error, status code: %d", res2.StatusCode)
+			return fmt.Errorf("unknown error 2, status code: %d", res2.StatusCode)
 		}
 
-		finalURL := res2.Request.URL.String()
+        //2nd POST with username and password
+        form2 := url.Values{}
+        form2.Add("__RequestVerificationToken", csrfToken)
+        form2.Add("Input.ReturnUrl", returnURL)
+        log.Println("returnURL", returnURL)
+        form2.Add("Input.Email", c.username)
+        form2.Add("Input.RememberLogin", "True")
+        form2.Add("Input.LocalLogin", "True")
+        form2.Add("Input.WebHostUrl", "https%3A%2F%2Fapp.intigriti.com")
+        form2.Add("Input.Password", c.password)
 
+        req21, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login", c.LoginURL), strings.NewReader(form.Encode()))
+        if err != nil {
+            return err
+        }
+        req21.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+        res21, err := c.HTTPClient.Do(req21)
+        if err != nil {
+            return err
+        }
+
+        defer res21.Body.Close()
+        bodyBytes2, err := io.ReadAll(res21.Body)
+        if err != nil {
+            log.Fatal(err)
+        }
+        bodyString2 := string(bodyBytes2)
+        log.Println(bodyString2)
+        return fmt.Errorf("First request! %d", 0)
+
+        // Get the slice of cookies from the request
+        cookies2 := req21.Cookies()
+
+        // Iterate over the slice of cookies and print the name and value of each cookie
+        for _, cookie2 := range cookies2 {
+            log.Println("Cookie: %s = %s\n", cookie2.Name, cookie2.Value)
+        }
+
+        if strings.Contains(bodyString2, "Login failed, please try again"){
+            log.Println("we fucked up")
+        }
+
+        
+		finalURL := res21.Request.URL.String()
+        log.Println("finalURL", finalURL)
 		// If last redirect was to /account/loginwith2fa we need a 2FA token
 		if strings.Contains(finalURL, "/account/loginwith2fa") {
 			if c.secret == "" {
@@ -165,7 +234,7 @@ func (c *Client) Authenticate() error {
 			// Parse HTML and find CSRF token and Return URL
 			root, err := html.Parse(res2.Body)
 			if err != nil {
-				return fmt.Errorf("unknown error, status code: %d", res2.StatusCode)
+				return fmt.Errorf("unknown error 3, status code: %d", res2.StatusCode)
 			}
 
 			csrfToken, err := c.getElementValue("__RequestVerificationToken", root)
@@ -173,15 +242,15 @@ func (c *Client) Authenticate() error {
 				log.Fatal(err.Error())
 			}
 
-			otpKey, err := totp.GenerateCode(c.secret, time.Now())
-			if err != nil {
-				return err
-			}
+			//otpKey, err := totp.GenerateCode(c.secret, time.Now())
+			//if err != nil {
+			//	return err
+			//}
 
 			// Prepare OTP form for POST request
 			otpForm := url.Values{}
 			otpForm.Add("__RequestVerificationToken", csrfToken)
-			otpForm.Add("Input.TwoFactorAuthentication.VerificationCode", otpKey)
+			//otpForm.Add("Input.TwoFactorAuthentication.VerificationCode", otpKey)
 
 			req3, err := http.NewRequest("POST", finalURL, strings.NewReader(otpForm.Encode()))
 			if err != nil {
@@ -196,9 +265,10 @@ func (c *Client) Authenticate() error {
 
 			defer res3.Body.Close()
 
+            log.Println("res3 status", res3.StatusCode)
 			// Check status
 			if res3.StatusCode < http.StatusOK || res3.StatusCode >= http.StatusBadRequest {
-				return fmt.Errorf("unknown error, status code: %d", res3.StatusCode)
+				return fmt.Errorf("Unknown error 4, status code: %d", res3.StatusCode)
 			}
 
 			finalURL := res3.Request.URL.String()
@@ -209,7 +279,7 @@ func (c *Client) Authenticate() error {
 			}
 		}
 
-		log.Println("Client authenticated")
+		//log.Println("Client authenticated!")
 	}
 
 	// Third request to get API token
@@ -224,9 +294,13 @@ func (c *Client) Authenticate() error {
 	}
 
 	defer res4.Body.Close()
+    bodyBytes3, err := io.ReadAll(res4.Body)
+    bodyString3 := string(bodyBytes3)
+    log.Println(bodyString3)
 
+    log.Println("res4 code",res4.StatusCode)
 	if res4.StatusCode < http.StatusOK || res4.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("unknown error, status code: %d", res4.StatusCode)
+		return fmt.Errorf("unknown error 5, status code: %d", res4.StatusCode)
 	}
 
 	// Parse response to get API Token
@@ -256,7 +330,7 @@ func (c *Client) sendRequest(req *http.Request, v interface{}) error {
 	defer res.Body.Close()
 
 	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("unknown error, status code: %d", res.StatusCode)
+		return fmt.Errorf("unknown error 5, status code: %d", res.StatusCode)
 	}
 
 	if err = json.NewDecoder(res.Body).Decode(&v); err != nil {

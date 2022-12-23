@@ -63,7 +63,7 @@ func run(ctx context.Context, conf *config, out io.Writer) error {
 
 	log.SetOutput(os.Stdout)
 
-	log.Printf("Starting monitoring with tick %s", conf.tick)
+	log.Printf("Starting monitoring with tick %s!!", conf.tick)
 	httpctx := context.Background()
 	for {
 		select {
@@ -73,8 +73,8 @@ func run(ctx context.Context, conf *config, out io.Writer) error {
 		case <-time.Tick(conf.tick):
 			err := c.Authenticate()
 			if err != nil {
-				log.Printf("Authentication error: %s\n", err)
-				continue
+				log.Printf("Authentication error!: %s\n", err)
+				return err//continue
 
 			}
 
