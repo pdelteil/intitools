@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"io"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
@@ -22,12 +21,14 @@ const (
 	ApiURL   = "https://api.intigriti.com"
 	AppURL   = "https://app.intigriti.com"
 	LoginURL = "https://login.intigriti.com"
+	SiteURL =  "https://www.intigriti.com"
 )
 
 type Client struct {
 	ApiURL        string
 	AppURL        string
 	LoginURL      string
+	SiteURL      string
 	apiKey        string
 	Authenticated bool
 	username      string
@@ -60,6 +61,11 @@ type ResponseUser struct {
 
 func NewClient(username string, password string, secret string, rl *rate.Limiter) *Client {
 
+    proxyURL, err := url.Parse("http://localhost:8080")
+
+	if err != nil { panic(err)}
+
+    //Cookie jar
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		log.Fatal(err)
@@ -69,6 +75,7 @@ func NewClient(username string, password string, secret string, rl *rate.Limiter
 	lastVisited := time.Now().Unix()
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+        Proxy: http.ProxyURL(proxyURL),
 	}
 	return &Client{
 		ApiURL:     ApiURL,
@@ -91,6 +98,23 @@ func NewClient(username string, password string, secret string, rl *rate.Limiter
 
 func (c *Client) Authenticate() error {
 
+	// 0 request to get cookieso
+	req0, err := http.NewRequest("GET", "https://www.intigriti.com", nil)
+	if err != nil {
+		return err
+	}
+
+	res0, err := c.HTTPClient.Do(req0)
+	if err != nil {
+		return err
+	}
+
+	defer res0.Body.Close()
+
+    log.Println("Req0 statuscode", res0.StatusCode)
+	if res0.StatusCode < http.StatusOK || res0.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("unknown error, status code: %d", res0.StatusCode)
+	}
 	// First request to get login page (and CSRF token / cookies)
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/auth/dashboard", c.AppURL), nil)
 	if err != nil {
@@ -104,16 +128,10 @@ func (c *Client) Authenticate() error {
 
 	defer res.Body.Close()
 
-    log.Println("statuscode", res.StatusCode)
+    log.Println("Req1 statuscode", res.StatusCode)
 	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("unknown error, status code: %d", res.StatusCode)
 	}
-    //bodyBytes, err := io.ReadAll(res.Body)
-        if err != nil {
-            log.Fatal(err)
-        }
-    //bodyString := string(bodyBytes)
-    //log.Println(bodyString)
 
 	finalURL := res.Request.URL.String()
 
@@ -126,6 +144,7 @@ func (c *Client) Authenticate() error {
 		}
 
 		csrfToken, err := c.getElementValue("__RequestVerificationToken", root)
+		log.Println("csrf", csrfToken)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
@@ -150,7 +169,7 @@ func (c *Client) Authenticate() error {
         //log.Println("Input.Password", c.password)
 
 		// We do not expect response body. Cookie is all we need (handled by CookieJar)
-		req2, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login", c.LoginURL), strings.NewReader(form.Encode()))
+		req2, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login?returnUrl=%s", c.LoginURL, url.QueryEscape(returnURL)), strings.NewReader(form.Encode()))
 		if err != nil {
 			return err
 		}
@@ -161,19 +180,11 @@ func (c *Client) Authenticate() error {
 		}
 
 		defer res2.Body.Close()
+        log.Println("request2 POST")
         //bodyBytes, err := io.ReadAll(res2.Body)
-        if err != nil {
-            log.Fatal(err)
-        }
+        if err != nil {    log.Fatal(err)       }
         //bodyString := string(bodyBytes)
             //log.Println(bodyString)
-        // Get the slice of cookies from the request
-        cookies := req2.Cookies()
-
-        // Iterate over the slice of cookies and print the name and value of each cookie
-        for _, cookie := range cookies {
-        	fmt.Printf("Cookie: %s = %s\n", cookie.Name, cookie.Value)
-        }
 
 		// Check status
 		if res2.StatusCode < http.StatusOK || res2.StatusCode >= http.StatusBadRequest {
@@ -184,14 +195,14 @@ func (c *Client) Authenticate() error {
         form2 := url.Values{}
         form2.Add("__RequestVerificationToken", csrfToken)
         form2.Add("Input.ReturnUrl", returnURL)
-        log.Println("returnURL", returnURL)
+        //log.Println("returnURL", returnURL)
         form2.Add("Input.Email", c.username)
         form2.Add("Input.RememberLogin", "True")
         form2.Add("Input.LocalLogin", "True")
         form2.Add("Input.WebHostUrl", "https%3A%2F%2Fapp.intigriti.com")
         form2.Add("Input.Password", c.password)
-
-        req21, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login", c.LoginURL), strings.NewReader(form.Encode()))
+		//log.Println(c.password)
+        req21, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login?returnUrl=%s", c.LoginURL, url.QueryEscape(returnURL)), strings.NewReader(form2.Encode()))
         if err != nil {
             return err
         }
@@ -202,27 +213,7 @@ func (c *Client) Authenticate() error {
         }
 
         defer res21.Body.Close()
-        bodyBytes2, err := io.ReadAll(res21.Body)
-        if err != nil {
-            log.Fatal(err)
-        }
-        bodyString2 := string(bodyBytes2)
-        log.Println(bodyString2)
-        return fmt.Errorf("First request! %d", 0)
 
-        // Get the slice of cookies from the request
-        cookies2 := req21.Cookies()
-
-        // Iterate over the slice of cookies and print the name and value of each cookie
-        for _, cookie2 := range cookies2 {
-            log.Println("Cookie: %s = %s\n", cookie2.Name, cookie2.Value)
-        }
-
-        if strings.Contains(bodyString2, "Login failed, please try again"){
-            log.Println("we fucked up")
-        }
-
-        
 		finalURL := res21.Request.URL.String()
         log.Println("finalURL", finalURL)
 		// If last redirect was to /account/loginwith2fa we need a 2FA token
@@ -294,9 +285,6 @@ func (c *Client) Authenticate() error {
 	}
 
 	defer res4.Body.Close()
-    bodyBytes3, err := io.ReadAll(res4.Body)
-    bodyString3 := string(bodyBytes3)
-    log.Println(bodyString3)
 
     log.Println("res4 code",res4.StatusCode)
 	if res4.StatusCode < http.StatusOK || res4.StatusCode >= http.StatusBadRequest {
