@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
 	//"github.com/pquerna/otp/totp"
 	"golang.org/x/net/html"
 	"golang.org/x/time/rate"
@@ -36,6 +35,7 @@ type Client struct {
 	secret        string
 	LastViewed    int64
 	WebhookURL    string
+    proxy         string
 	Ratelimiter   *rate.Limiter
 	HTTPClient    *http.Client
 }
@@ -59,11 +59,11 @@ type ResponseUser struct {
 	Username string `json:"userName"`
 }
 
-func NewClient(username string, password string, secret string, rl *rate.Limiter) *Client {
+func NewClient(username string, password string, secret string, rl *rate.Limiter, proxy string) *Client {
 
-    proxyURL, err := url.Parse("http://localhost:8080")
-
-	if err != nil { panic(err)}
+    log.Println("proxy ",proxy)
+    //proxyURL, err := url.Parse("http://localhost:8080")
+	//if err != nil { panic(err)}
 
     //Cookie jar
 	jar, err := cookiejar.New(nil)
@@ -75,8 +75,17 @@ func NewClient(username string, password string, secret string, rl *rate.Limiter
 	lastVisited := time.Now().Unix()
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-        Proxy: http.ProxyURL(proxyURL),
+        //Proxy: http.ProxyURL(proxyURL),
 	}
+
+    if proxy != "" {
+        proxyURL, err := url.Parse(proxy)
+        if err != nil {
+            log.Println("Error with proxy")
+        }
+        tr.Proxy = http.ProxyURL(proxyURL)
+    }
+
 	return &Client{
 		ApiURL:     ApiURL,
 		LoginURL:   LoginURL,
@@ -98,53 +107,30 @@ func NewClient(username string, password string, secret string, rl *rate.Limiter
 
 func (c *Client) Authenticate() error {
 
-	// 0 request to get cookieso
-	req0, err := http.NewRequest("GET", "https://www.intigriti.com", nil)
-	if err != nil {
-		return err
-	}
-
-	res0, err := c.HTTPClient.Do(req0)
-	if err != nil {
-		return err
-	}
-
-	defer res0.Body.Close()
-
-    log.Println("Req0 statuscode", res0.StatusCode)
-	if res0.StatusCode < http.StatusOK || res0.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("unknown error, status code: %d", res0.StatusCode)
-	}
 	// First request to get login page (and CSRF token / cookies)
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/auth/dashboard", c.AppURL), nil)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
 	res, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
+	if err != nil {	return err	}
 
 	defer res.Body.Close()
 
-    log.Println("Req1 statuscode", res.StatusCode)
-	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("unknown error, status code: %d", res.StatusCode)
-	}
+    //log.Println("Req1 statuscode", res.StatusCode)
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusBadRequest {		return fmt.Errorf("unknown error, status code: %d", res.StatusCode)	}
 
 	finalURL := res.Request.URL.String()
 
 	// If last redirect was to /researcher/ we are already logged in (just grab API token)
 	if finalURL[len(finalURL)-12:] != "/researcher/" {
 		// Parse HTML and find CSRF token and Return URL
+        //log.Println(res)
 		root, err := html.Parse(res.Body)
 		if err != nil {
 			return fmt.Errorf("unknown error 1, status code: %d", res.StatusCode)
 		}
 
 		csrfToken, err := c.getElementValue("__RequestVerificationToken", root)
-		log.Println("csrf", csrfToken)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
@@ -159,14 +145,10 @@ func (c *Client) Authenticate() error {
 		form := url.Values{}
 		form.Add("__RequestVerificationToken", csrfToken)
 		form.Add("Input.ReturnUrl", returnURL)
-        //log.Println("returnURL", returnURL)
 		form.Add("Input.Email", c.username)
         form.Add("Input.RememberLogin", "true")
         form.Add("Input.LocalLogin", "false")
         form.Add("Input.WebHostUrl", "https://app.intigriti.com")
-        //log.Println("Input.Email", c.username)
-		//form.Add("Input.Password", c.password)
-        //log.Println("Input.Password", c.password)
 
 		// We do not expect response body. Cookie is all we need (handled by CookieJar)
 		req2, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login?returnUrl=%s", c.LoginURL, url.QueryEscape(returnURL)), strings.NewReader(form.Encode()))
@@ -180,11 +162,7 @@ func (c *Client) Authenticate() error {
 		}
 
 		defer res2.Body.Close()
-        log.Println("request2 POST")
-        //bodyBytes, err := io.ReadAll(res2.Body)
         if err != nil {    log.Fatal(err)       }
-        //bodyString := string(bodyBytes)
-            //log.Println(bodyString)
 
 		// Check status
 		if res2.StatusCode < http.StatusOK || res2.StatusCode >= http.StatusBadRequest {
@@ -195,13 +173,11 @@ func (c *Client) Authenticate() error {
         form2 := url.Values{}
         form2.Add("__RequestVerificationToken", csrfToken)
         form2.Add("Input.ReturnUrl", returnURL)
-        //log.Println("returnURL", returnURL)
         form2.Add("Input.Email", c.username)
         form2.Add("Input.RememberLogin", "True")
         form2.Add("Input.LocalLogin", "True")
         form2.Add("Input.WebHostUrl", "https%3A%2F%2Fapp.intigriti.com")
         form2.Add("Input.Password", c.password)
-		//log.Println(c.password)
         req21, err := http.NewRequest("POST", fmt.Sprintf("%s/Account/Login?returnUrl=%s", c.LoginURL, url.QueryEscape(returnURL)), strings.NewReader(form2.Encode()))
         if err != nil {
             return err
@@ -215,7 +191,6 @@ func (c *Client) Authenticate() error {
         defer res21.Body.Close()
 
 		finalURL := res21.Request.URL.String()
-        log.Println("finalURL", finalURL)
 		// If last redirect was to /account/loginwith2fa we need a 2FA token
 		if strings.Contains(finalURL, "/account/loginwith2fa") {
 			if c.secret == "" {
@@ -256,7 +231,7 @@ func (c *Client) Authenticate() error {
 
 			defer res3.Body.Close()
 
-            log.Println("res3 status", res3.StatusCode)
+            //log.Println("res3 status", res3.StatusCode)
 			// Check status
 			if res3.StatusCode < http.StatusOK || res3.StatusCode >= http.StatusBadRequest {
 				return fmt.Errorf("Unknown error 4, status code: %d", res3.StatusCode)
@@ -286,7 +261,7 @@ func (c *Client) Authenticate() error {
 
 	defer res4.Body.Close()
 
-    log.Println("res4 code",res4.StatusCode)
+    //log.Println("res4 code",res4.StatusCode)
 	if res4.StatusCode < http.StatusOK || res4.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("unknown error 5, status code: %d", res4.StatusCode)
 	}
@@ -298,6 +273,8 @@ func (c *Client) Authenticate() error {
 	}
 	c.apiKey = string(apiToken[1 : len(apiToken)-1])
 	c.Authenticated = true
+    log.Println("Bearer ", c.apiKey)
+
 
 	return nil
 }

@@ -56,7 +56,7 @@ func run(ctx context.Context, conf *config, out io.Writer) error {
 	conf.init(os.Args)
 
 	rl := rate.NewLimiter(rate.Every(time.Second), 2) // 2 requests every second
-	c := intitools.NewClient(conf.username, conf.password, conf.secret, rl)
+	c := intitools.NewClient(conf.username, conf.password, conf.secret, rl, conf.proxy)
 	c.WebhookURL = conf.webhookurl
 
 	sendlast := conf.sendlast
@@ -64,6 +64,13 @@ func run(ctx context.Context, conf *config, out io.Writer) error {
 	log.SetOutput(os.Stdout)
 
 	log.Printf("Starting monitoring with tick %s!!", conf.tick)
+
+	// Send the message to the Discord webhook
+	//activity := intitools.Activity{Programid:       "abc123",Submissioncode:  "def456",		Programname:     "Test Program",		Submissiontitle: "Test Submission", Companyhandle:   "test-company",		Programhandle:   "test-program",		Programlogoid:   "123456",		Discriminator:   1,}
+    //message := c.DiscordFormatActivity(activity)
+
+	//if err := c.DiscordSend(ctx, message); 
+    //err != nil {  log.Println("error", err) return nil	}
 	httpctx := context.Background()
 	for {
 		select {
@@ -71,13 +78,15 @@ func run(ctx context.Context, conf *config, out io.Writer) error {
 			return nil
 
 		case <-time.Tick(conf.tick):
+            log.Printf("Starting authentication")
 			err := c.Authenticate()
 			if err != nil {
 				log.Printf("Authentication error!: %s\n", err)
 				return err//continue
 
 			}
-
+            //only login
+            return nil
 			numActivities, err := c.CheckActivity(httpctx)
 			if err != nil {
 				log.Printf("CheckActivity error: %s\n", err)

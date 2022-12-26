@@ -18,6 +18,7 @@ type config struct {
 	webhookurl  string
 	webhooktype string
 	sendlast    int
+    proxy       string
 }
 
 func (c *config) init(args []string) error {
@@ -32,6 +33,7 @@ func (c *config) init(args []string) error {
 		webhookurl  = flags.String("webhook", "", "Webhook URL")
 		webhooktype = flags.String("type", "slack", "Webhook type [slack|discord]")
 		sendlast    = flags.Int("last", 0, "Number of activity entries sent on start (for debugging)")
+        proxy       = flags.String("proxy", "", "Proxy to use") 
 	)
 
 	if err := flags.Parse(args[1:]); err != nil {
@@ -51,6 +53,7 @@ func (c *config) init(args []string) error {
 	c.webhookurl = *webhookurl
 	c.webhooktype = *webhooktype
 	c.sendlast = *sendlast
+    c.proxy = *proxy
 
 	return nil
 }
